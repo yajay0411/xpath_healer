@@ -1,0 +1,26 @@
+# fly launch --no-deploy  will rewrite app/primary_region; keep the rest.
+app = "xpath-healer"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3002"
+  CHROME_PATH = "/usr/bin/chromium"
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 3002
+  force_https = true
+  # A heal holds no in-memory state between steps - Inngest does - but a machine stopped
+  # mid-step forces a retry, so keep one always on rather than scaling to zero.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  # Chromium needs real memory. 256MB will OOM the moment the XPath gate launches it.
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
