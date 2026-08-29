@@ -14,7 +14,23 @@ The `/api/v1/webhooks/jenkins` route alone *would* run on Vercel — it only tou
 and `inngest.send`. But `/api/inngest`, where the actual healing happens, needs a container.
 Splitting the two buys nothing once you need the container anyway.
 
-Use **Fly** or **Railway**. Both build the `Dockerfile` in this repo, on amd64, remotely.
+Use **Render**, **Fly** or **Railway**. All three build the `Dockerfile` in this repo, on
+amd64, remotely.
+
+## Render
+
+Dashboard → **New → Blueprint** → point it at this repo. `render.yaml` describes the service;
+Render prompts for the 11 secrets marked `sync: false` and never stores them in the repo.
+
+**Pick the Standard plan.** Free and Starter both cap at 512MB, and the XPath gate launches
+Chromium — it will OOM. Free instances also spin down when idle, and an Inngest step arriving
+at a cold instance is a failed step, not a slow one. This is the one place Render costs more
+than the alternatives; Fly's 1GB shared-cpu machine is cheaper for the same job.
+
+Health check is `GET /api/v1/webhooks/jenkins`, which returns `200` without authenticating —
+it reports the endpoint contract, not data.
+
+Render injects its own `PORT`; the image binds whatever it is given (verified at `PORT=10000`).
 
 ## Fly
 

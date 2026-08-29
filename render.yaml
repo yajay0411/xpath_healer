@@ -1,0 +1,77 @@
+# Render Blueprint.  Dashboard: New > Blueprint, point it at this repo.
+#
+# Secrets are declared with `sync: false`, which means Render prompts for them at deploy and
+# never stores them here. Do not give any of them a `value:` in this file.
+services:
+  - type: web
+    name: xpath-healer
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: oregon
+    # NOT free or starter. Both cap at 512MB, and the XPath gate launches Chromium, which
+    # OOMs well before that. Free instances also spin down when idle, and an Inngest step
+    # arriving at a cold instance is a failed step, not a slow one.
+    plan: standard
+    healthCheckPath: /api/v1/webhooks/jenkins
+    autoDeploy: true
+
+    envVars:
+      # Render injects PORT itself; server.js binds whatever it is given.
+      - key: NODE_ENV
+        value: production
+      - key: CHROME_PATH
+        value: /usr/bin/chromium
+
+      # --- the kill switch and the blast radius ---------------------------
+      - key: HEALER_ENABLED
+        value: "true"
+      - key: HEAL_ALLOWED_REPOS
+        sync: false
+      - key: HEAL_BASE_BRANCH
+        value: main
+      - key: HEAL_MAX_USD_PER_DAY
+        value: "5"
+      - key: HEAL_MAX_RUNS_PER_DAY
+        value: "10"
+
+      # --- secrets: set in the Render dashboard ---------------------------
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: JENKINS_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+
+      # Jenkins must be reachable FROM Render. A laptop on localhost is not.
+      - key: JENKINS_URL
+        sync: false
+      - key: JENKINS_USER
+        sync: false
+      - key: JENKINS_API_TOKEN
+        sync: false
+      - key: JENKINS_VERIFY_JOB
+        value: heal-verify
+      - key: HEAL_VERIFY_TIMEOUT
+        value: 30m
+
+      # --- model ------------------------------------------------------------
+      - key: LLM_PROVIDER
+        value: groq
+      - key: HEAL_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_API_KEY
+        sync: false
+      - key: HEAL_PRICE_INPUT
+        value: "0.15"
+      - key: HEAL_PRICE_OUTPUT
+        value: "0.60"
+
+      # --- Inngest ----------------------------------------------------------
+      # INNGEST_DEV is deliberately absent. v4 defaults to Cloud and fails closed without a
+      # signing key; setting it here would disable signature verification in production.
+      - key: INNGEST_EVENT_KEY
+        sync: false
+      - key: INNGEST_SIGNING_KEY
+        sync: false
