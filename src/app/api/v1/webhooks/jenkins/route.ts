@@ -1,0 +1,114 @@
+import { timingSafeEqual } from "node:crypto";
+import { NextResponse } from "next/server";
+
+import { normalize } from "@/lib/normalize";
+import { db } from "@/lib/supabase";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const SECRET = process.env.JENKINS_WEBHOOK_SECRET;
+
+/** Constant time, and length-safe: timingSafeEqual throws on a length mismatch. */
+function secretMatches(presented: string | null): boolean {
+  if (!SECRET || !presented) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(SECRET);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Header allow-list: logging every header would capture the secret itself. */
+const LOGGED_HEADERS = [
+  "content-type",
+  "user-agent",
+  "x-jenkins-job",
+  "x-jenkins-build",
+  "x-delivery-id",
+];
+
+export async function POST(request: Request) {
+  const headers = Object.fromEntries(
+    LOGGED_HEADERS.map((h) => [h, request.headers.get(h)]).filter(([, v]) => v !== null),
+  );
+  const deliveryId = request.headers.get("x-delivery-id");
+  const authOk = secretMatches(request.headers.get("x-webhook-secret"));
+
+  const body = await request.text();
+  let raw: Record<string, unknown> | null = null;
+  let parseError: string | null = null;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      parseError = "Body is valid JSON but not an object.";
+    } else {
+      raw = parsed as Record<string, unknown>;
+    }
+  } catch (e) {
+    parseError = e instanceof Error ? e.message : "Body is not valid JSON.";
+  }
+
+  const status = !authOk ? 401 : parseError ? 400 : 202;
+
+  // Normalize even a rejected hit, so the log row is still queryable.
+  const normalized = raw ? normalize(raw) : null;
+
+  // A rejected or malformed hit is still recorded: probes and bad senders are what we want to see.
+  const { data, error } = await db
+    .from("webhook_log")
+    .insert({
+      source: "jenkins",
+      event: normalized?.event ?? null,
+      delivery_id: deliveryId,
+      http_status: status,
+      auth_ok: authOk,
+      headers,
+      raw_payload: raw,
+      normalized,
+      parse_error: parseError,
+      job_name: normalized?.build.job ?? null,
+      build_number: normalized?.build.number ?? null,
+      build_url: normalized?.build.url ?? null,
+      build_result: normalized?.build.result ?? null,
+      branch: normalized?.scm.branch ?? null,
+      commit_sha: normalized?.scm.commit ?? null,
+      tests_total: normalized?.tests.total ?? null,
+      tests_failed: normalized?.tests.failed ?? null,
+      xpath_related: normalized?.diagnosis.xpathRelated ?? false,
+      suspect_xpaths: normalized?.diagnosis.suspectXpaths ?? [],
+    })
+    .select("id")
+    .single();
+
+  // A replayed delivery is not an error; the first row already holds the data.
+  if (error?.code === "23505") {
+    return NextResponse.json({ ok: true, duplicate: true, deliveryId }, { status: 200 });
+  }
+  if (error) {
+    console.error("[webhooks/jenkins] insert failed:", error.message);
+    return NextResponse.json({ ok: false, error: "Could not record webhook." }, { status: 500 });
+  }
+
+  if (!authOk) {
+    return NextResponse.json({ ok: false, error: "Bad or missing secret." }, { status: 401 });
+  }
+  if (parseError) {
+    return NextResponse.json({ ok: false, error: parseError }, { status: 400 });
+  }
+
+  return NextResponse.json(
+    {
+      ok: true,
+      id: data.id,
+      event: normalized!.event,
+      diagnosis: normalized!.diagnosis,
+    },
+    { status: 202 },
+  );
+}
+
+export async function GET() {
+  return NextResponse.json(
+    { ok: true, endpoint: "jenkins webhook", method: "POST", auth: "X-Webhook-Secret header" },
+    { status: 200 },
+  );
+}
