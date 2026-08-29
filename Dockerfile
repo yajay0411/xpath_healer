@@ -20,9 +20,12 @@ COPY . .
 # supabase.ts throws at import time without these, and `next build` imports it while
 # collecting page data. Passed per-command rather than as ENV so no placeholder credential is
 # baked into an image layer; the real values are injected at runtime.
+# --webpack, not Turbopack: Turbopack ships no native bindings for linux/arm64 and the build
+# dies there. Webpack builds on both architectures, which is what lets this image run on the
+# free ARM tiers (Oracle Ampere, AWS Graviton) as well as on amd64.
 RUN SUPABASE_URL=https://placeholder.invalid \
     SUPABASE_SECRET_KEY=unused-at-build-time \
-    npm run build
+    npx next build --webpack
 
 # ---- runner -----------------------------------------------------------------
 FROM node:22-bookworm-slim AS runner
