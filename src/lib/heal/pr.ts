@@ -56,26 +56,18 @@ ${e.rationale ? `**Why this anchor:** ${e.rationale}\n` : ""}
 > element the test means, not merely an element that satisfies the assertions.`;
 }
 
-/** Commit, push the branch, and open the PR. Never pushes to the base branch. */
-export async function openPullRequest(dir: string, e: PrEvidence): Promise<string> {
+/**
+ * Open the PR for the branch apply-and-push already pushed and GATE 5 already proved green.
+ *
+ * It does NOT commit or push. It used to, which meant the branch was built twice: once by
+ * apply-and-push (force-pushed, then verified) and again here from a fresh checkout. The
+ * second commit differed only by timestamp, so its non-forced push was rejected
+ * non-fast-forward and the PR was never even requested - a branch appeared, a PR never did.
+ * Opening a PR for a ref other than the one GATE 5 verified would also be a lie.
+ */
+export async function openPullRequest(e: PrEvidence): Promise<string> {
   const branch = branchName(e);
   const base = process.env.HEAL_BASE_BRANCH ?? "main";
-
-  await git(dir, "config", "user.name", "xpath-healer[bot]");
-  await git(dir, "config", "user.email", "xpath-healer@users.noreply.github.com");
-  await git(dir, "checkout", "-q", "-b", branch);
-  await git(dir, "add", e.file);
-  await git(
-    dir,
-    "commit",
-    "-q",
-    "-m",
-    `fix(locators): heal ${e.constantName} after markup change\n\n` +
-      `${e.jobName}#${e.buildNumber} · run ${e.runId}\n` +
-      `Was:  ${e.oldXpath}\nNow:  ${e.newXpath}\n\n` +
-      `Opened by xpath_healer. Review before merging.`,
-  );
-  await git(dir, "push", "-q", "-u", "origin", branch);
 
   const response = await fetch(`https://api.github.com/repos/${e.repoFullName}/pulls`, {
     method: "POST",
@@ -94,14 +86,16 @@ export async function openPullRequest(dir: string, e: PrEvidence): Promise<strin
     }),
   });
 
-  const json = (await response.json()) as { html_url?: string; message?: string };
-  if (!response.ok || !json.html_url) {
+  const json = (await response.json()) as { html_url?: string; number?: number; message?: string };
+  if (!response.ok || !json.html_url || !json.number) {
     throw new Error(scrub(`GitHub refused the PR: ${response.status} ${json.message}`));
   }
 
   // Labels are best-effort: a missing label must not fail a verified heal.
+  // The number comes from the response, not from parsing html_url - the URL shape is not a
+  // contract, and a trailing slash or a future ?query would silently address the wrong issue.
   await fetch(
-    `https://api.github.com/repos/${e.repoFullName}/issues/${json.html_url.split("/").pop()}/labels`,
+    `https://api.github.com/repos/${e.repoFullName}/issues/${json.number}/labels`,
     {
       method: "POST",
       headers: {

@@ -16,10 +16,33 @@ export function repoSlug(
 }
 
 /**
- * The durable identity of a heal: one locator, broken at one commit, forever.
- * A Jenkins replay produces zero additional runs; a new commit produces a new one.
+ * Collapses the many events one build emits for a single broken locator - a cascade of ten
+ * failing tests naming the same XPath is ONE heal.
+ *
+ * Scoped to the build on purpose. This key feeds Inngest's `idempotency` config, whose cache
+ * is in-process and 24h-lived; keying it on the commit alone made a re-run of the same build
+ * a silent no-op, and made a crashed run unretryable until the commit changed. The durable
+ * "never open two PRs for the same drift" guarantee is NOT here - it lives in the heal_run
+ * lookup in workflow.ts, where it is inspectable and outlives any process.
  */
-export function idempotencyKey(fullName: string, commitSha: string, brokenXpath: string): string {
+export function idempotencyKey(
+  fullName: string,
+  commitSha: string,
+  brokenXpath: string,
+  buildNumber: number,
+): string {
+  return createHash("sha256")
+    .update(`${fullName}:${commitSha}:${buildNumber}:${brokenXpath}`)
+    .digest("hex");
+}
+
+/**
+ * One locator, broken at one commit - stable across re-runs of the build, unlike
+ * idempotencyKey. Used as the `singleton` key so two builds reporting the same drift cannot
+ * heal it concurrently: concurrency limits do not help here, because a slot is released while
+ * the run waits on the Jenkins verify builds, which is most of a heal's wall clock.
+ */
+export function driftKey(fullName: string, commitSha: string, brokenXpath: string): string {
   return createHash("sha256").update(`${fullName}:${commitSha}:${brokenXpath}`).digest("hex");
 }
 

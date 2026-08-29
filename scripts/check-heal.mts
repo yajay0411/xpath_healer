@@ -13,7 +13,8 @@ import { sanitizeDom } from "../src/lib/heal/dom.ts";
 import { deterministicCandidates, FORBIDDEN, parseLastStep } from "../src/lib/heal/candidates.ts";
 import { findLocator } from "../src/lib/heal/locator.ts";
 import { applyLocator, diffIsSafe } from "../src/lib/heal/patch.ts";
-import { branchName, idempotencyKey, repoSlug } from "../src/lib/heal/identity.ts";
+import { branchName, driftKey, idempotencyKey, repoSlug } from "../src/lib/heal/identity.ts";
+import { git, scrub } from "../src/lib/heal/repo.ts";
 
 const FIXTURE = join(import.meta.dirname, "fixtures", "login-page.html");
 const realDom = readFileSync(FIXTURE, "utf8");
@@ -188,13 +189,48 @@ public class LoginPage extends BasePage {
   assert.equal(diffIsSafe("").ok, false, "an empty diff is REJECTED");
 }
 
+// --- the token never reaches an error string ------------------------------
+{
+  // execFile puts the full argv in the error, and the clone remote carries the token.
+  process.env.GITHUB_TOKEN = "ghp_TESTTOKENVALUE0000000000000000000000";
+  let message = "";
+  try {
+    await git("/tmp", "ls-remote", `https://x-access-token:${process.env.GITHUB_TOKEN}@github.com/nope/nope.git`);
+  } catch (e) {
+    message = e instanceof Error ? e.message : String(e);
+  }
+  assert.ok(message.length > 0, "the failing git call must throw");
+  assert.ok(!message.includes(process.env.GITHUB_TOKEN), "a git failure must NOT leak the token");
+
+  // The fallback path. git redacts credentials in its own stderr, so the dangerous string is
+  // execFile's message - which is what we use whenever stderr is empty.
+  assert.ok(
+    !scrub(`Command failed: git remote add origin https://x-access-token:${process.env.GITHUB_TOKEN}@github.com/o/r.git`)
+      .includes(process.env.GITHUB_TOKEN),
+    "scrub removes the token from an execFile-style message",
+  );
+  assert.ok(scrub(`x${process.env.GITHUB_TOKEN}y`) === "x\u00abtoken\u00bby", "scrub marks the redaction");
+  delete process.env.GITHUB_TOKEN;
+}
+
 // --- idempotency (§J) ----------------------------------------------------
 {
-  const a = idempotencyKey("o/r", "abc123", "//input[@id='email']");
-  const b = idempotencyKey("o/r", "abc123", "//input[@id='email']");
-  assert.equal(a, b, "the same failure yields a byte-identical key");
-  assert.notEqual(a, idempotencyKey("o/r", "def456", "//input[@id='email']"), "a new commit is a new run");
-  assert.notEqual(a, idempotencyKey("o/r", "abc123", "//input[@id='pass']"), "a new locator is a new run");
+  const a = idempotencyKey("o/r", "abc123", "//input[@id='email']", 7);
+  const b = idempotencyKey("o/r", "abc123", "//input[@id='email']", 7);
+  assert.equal(a, b, "the same failure in the same build yields a byte-identical key");
+  assert.notEqual(a, idempotencyKey("o/r", "def456", "//input[@id='email']", 7), "a new commit is a new run");
+  assert.notEqual(a, idempotencyKey("o/r", "abc123", "//input[@id='pass']", 7), "a new locator is a new run");
+  // The regression this guards: a re-run of the same build used to dedupe to nothing, so a
+  // crashed heal could never be retried without pushing a new commit.
+  assert.notEqual(a, idempotencyKey("o/r", "abc123", "//input[@id='email']", 8), "a re-run is a new run");
+
+  // driftKey is the singleton lock: it must be STABLE across re-runs (so two builds cannot
+  // heal one drift concurrently) while idempotencyKey varies (so a re-run is a real retry).
+  const d1 = driftKey("o/r", "abc123", "//input[@id='email']");
+  assert.equal(d1, driftKey("o/r", "abc123", "//input[@id='email']"), "driftKey is stable across builds");
+  assert.notEqual(d1, driftKey("o/r", "def456", "//input[@id='email']"), "a new commit is a new drift");
+  assert.notEqual(d1, driftKey("o/r", "abc123", "//input[@id='pass']"), "a new locator is a new drift");
+  assert.notEqual(d1, a, "the two keys are not interchangeable");
 
   assert.equal(repoSlug("https://github.com/yajay0411/next_login_javatestcase.git")?.fullName,
     "yajay0411/next_login_javatestcase");

@@ -23,8 +23,10 @@ export type HealStatus = (typeof HEAL_STATUSES)[number];
 export const xpathFailureDetected = eventType("xpath/failure.detected", {
   schema: z.object({
     eventId: z.string(),
-    /** sha256("<fullName>:<commitSha>:<brokenXpath>"). The durable identity of a heal. */
+    /** sha256(repo:commit:build:xpath). Collapses one build's many events into one run. */
     idempotencyKey: z.string(),
+    /** sha256(repo:commit:xpath). Stable across re-runs; the singleton lock for this drift. */
+    driftKey: z.string(),
 
     repository: z.object({
       owner: z.string(),

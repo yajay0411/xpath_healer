@@ -11,8 +11,6 @@ export type FoundLocator = {
 /** The only directory the healer may ever write to. */
 const PAGES_DIR = join("src", "test", "java", "com", "nextlogin", "pages");
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 /**
  * Find the `public static final String NAME = "<xpath>"` that produced this failure.
  *

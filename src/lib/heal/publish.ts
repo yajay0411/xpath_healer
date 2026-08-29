@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { inngest } from "../events";
 import { putDom } from "../storage";
 import { sanitizeDom } from "./dom";
-import { idempotencyKey, repoSlug } from "./identity";
+import { driftKey, idempotencyKey, repoSlug } from "./identity";
 import type { NormalizedBuildFailure } from "../types";
 
 type RawFailure = { domGz?: string; pageUrl?: string };
@@ -51,7 +51,13 @@ export async function publishFailures(
         name: "xpath/failure.detected" as const,
         data: {
           eventId,
-          idempotencyKey: idempotencyKey(repo.fullName, commitSha, brokenXpath),
+          idempotencyKey: idempotencyKey(
+            repo.fullName,
+            commitSha,
+            brokenXpath,
+            normalized.build.number ?? 0,
+          ),
+          driftKey: driftKey(repo.fullName, commitSha, brokenXpath),
           repository: repo,
           scm: { commitSha, branch: normalized.scm.branch ?? undefined },
           build: {

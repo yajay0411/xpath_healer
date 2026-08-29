@@ -10,6 +10,14 @@ const REGISTRY: Record<string, LocatorProvider> = {
     apiKeyEnv: "XAI_API_KEY",
     defaultModel: "grok-4",
   }),
+  // Groq gates json_schema to openai/gpt-oss-* and qwen/qwen3.8-27b. Point HEAL_MODEL at
+  // one of those; anything else 400s at response_format rather than returning a bad locator.
+  groq: openAiCompatible({
+    name: "groq",
+    baseUrl: "https://api.groq.com/openai/v1",
+    apiKeyEnv: "GROQ_API_KEY",
+    defaultModel: "openai/gpt-oss-120b",
+  }),
   openai: openAiCompatible({
     name: "openai",
     baseUrl: "https://api.openai.com/v1",

@@ -20,6 +20,31 @@ import { join } from "node:path";
 const VERIFY_TIMEOUT = process.env.HEAL_VERIFY_TIMEOUT ?? "30m";
 
 /**
+ * The PR already open for this exact drift, if there is one.
+ *
+ * Checked twice: once at STEP A as a cheap early-out, and again immediately before the PR is
+ * opened. Once is not enough - a heal takes minutes and waitForEvent releases the concurrency
+ * slot while it waits, so a second build clears STEP A long before the first records its PR.
+ * The late check narrows that window from minutes to the round trip below.
+ */
+async function existingPrUrl(
+  repoFullName: string,
+  commitSha: string,
+  brokenXpath: string,
+): Promise<string | null> {
+  const { data } = await db
+    .from("heal_run")
+    .select("pr_url")
+    .eq("repo_full_name", repoFullName)
+    .eq("commit_sha", commitSha)
+    .eq("broken_xpath", brokenXpath)
+    .not("pr_url", "is", null)
+    .limit(1)
+    .maybeSingle();
+  return (data?.pr_url as string | undefined) ?? null;
+}
+
+/**
  * The durable healing workflow. Orchestration only: every decision lives in a pure module
  * beside this one, so each gate is testable without Inngest, Jenkins or a network.
  *
@@ -31,8 +56,17 @@ export const healXpath = inngest.createFunction(
   {
     id: "heal-xpath",
     triggers: [{ event: xpathFailureDetected }],
-    // Workflow-level idempotency. The durable layer is the unique index on heal_run.
+    // Three layers, each covering what the one below cannot:
+    //
+    // 1. idempotency - collapses the many events a SINGLE build emits for one locator.
+    //    Scoped to the build, so re-running the job is a real retry, not a silent no-op.
+    // 2. singleton   - no two heals for the SAME drift run at once. concurrency cannot do
+    //    this: its slot is released during waitForEvent, which is most of a heal's wall
+    //    clock, so a second build would sail straight past it and open a duplicate PR.
+    // 3. the heal_run pr_url check in STEP A - the durable, across-time guarantee that one
+    //    drift never gets two PRs, long after any in-memory lock has expired.
     idempotency: "event.data.idempotencyKey",
+    singleton: { key: "event.data.driftKey", mode: "skip" },
     // Two heals must never race the same checkout.
     concurrency: { key: "event.data.repository.fullName", limit: 1 },
     retries: 3,
@@ -48,7 +82,17 @@ export const healXpath = inngest.createFunction(
       const budget = await checkBudget();
       if (!budget.ok) throw new NonRetriableError(`budget:${budget.reason}`);
 
-      // The run row is the durable idempotency layer: a second insert cannot succeed.
+      // The durable guarantee, and the only one that must survive a restart: never open a
+      // second PR for a drift that already has one. Anything short of an open PR - a crash, a
+      // failed gate, a rejected candidate - is retryable, so re-running the Jenkins job is a
+      // real retry rather than a silent no-op. Re-checked before the PR is actually opened.
+      const already = await existingPrUrl(
+        d.repository.fullName,
+        d.scm.commitSha,
+        d.failure.brokenXpath,
+      );
+      if (already) throw new NonRetriableError(`already_healed:${already}`);
+
       const { data, error } = await db
         .from("heal_run")
         .upsert(
@@ -134,14 +178,17 @@ export const healXpath = inngest.createFunction(
         if (!budget.ok) throw new NonRetriableError(`budget:${budget.reason}`);
 
         const llm = provider();
-        const sourceFile = await step.run("read-source-for-model", async () => {
-          const { dir, cleanup } = await checkoutCommit(d.repository.fullName, d.scm.commitSha);
-          try {
-            return readFileSync(join(dir, located.file), "utf8");
-          } finally {
-            await cleanup();
-          }
-        });
+
+        // Inline, NOT a nested step.run: Inngest forbids nesting step tooling, and a nested
+        // call hangs the run rather than failing it. This block is already durable - it is
+        // inside the ai-fallback step.
+        const { dir, cleanup } = await checkoutCommit(d.repository.fullName, d.scm.commitSha);
+        let sourceFile: string;
+        try {
+          sourceFile = readFileSync(join(dir, located.file), "utf8");
+        } finally {
+          await cleanup();
+        }
 
         const request = {
           brokenXpath: d.failure.brokenXpath,
@@ -265,7 +312,17 @@ export const healXpath = inngest.createFunction(
         await git(dir, "config", "user.email", "xpath-healer@users.noreply.github.com");
         await git(dir, "checkout", "-q", "-b", branch);
         await git(dir, "add", located.file);
-        await git(dir, "commit", "-q", "-m", `fix(locators): heal ${located.constantName}`);
+        // The only commit on this branch: it is what GATE 5 verifies and what the PR shows.
+        await git(
+          dir,
+          "commit",
+          "-q",
+          "-m",
+          `fix(locators): heal ${located.constantName} after markup change\n\n` +
+            `${d.build.jobName}#${d.build.buildNumber} · run ${runId}\n` +
+            `Was:  ${located.oldXpath}\nNow:  ${candidate.xpath}\n\n` +
+            `Opened by xpath_healer. Review before merging.`,
+        );
         await git(dir, "push", "-q", "-f", "-u", "origin", branch);
 
         return { changedLines: verdict.changedLines };
@@ -322,45 +379,41 @@ export const healXpath = inngest.createFunction(
     await step.run("mark-verified", () => updateRun(runId, { status: "verified" }));
 
     // ---- open the PR. A human merges it; there is no auto-merge path. ----
+    // No checkout, no re-apply: the branch is already pushed and already proved green. This
+    // step only asks GitHub to open the PR for it.
     const prUrl = await step.run("create-pr", async () => {
-      const { dir, cleanup } = await checkoutCommit(d.repository.fullName, d.scm.commitSha);
-      try {
-        const abs = join(dir, located.file);
-        const applied = applyLocator(
-          readFileSync(abs, "utf8"),
-          located.constantName,
-          located.oldXpath,
-          candidate.xpath,
-        );
-        if (!applied.ok) throw new NonRetriableError(`apply:${applied.reason}`);
-        writeFileSync(abs, applied.source);
+      // Last check before the irreversible bit. STEP A cleared minutes ago; another build for
+      // the same drift may have opened its PR since.
+      const raced = await existingPrUrl(
+        d.repository.fullName,
+        d.scm.commitSha,
+        d.failure.brokenXpath,
+      );
+      if (raced) throw new NonRetriableError(`already_healed:${raced}`);
 
-        const evidence: PrEvidence = {
-          repoFullName: d.repository.fullName,
-          runId,
-          jobName: d.build.jobName,
-          buildNumber: d.build.buildNumber,
-          buildUrl: d.build.buildUrl,
-          commitSha: d.scm.commitSha,
-          testClass: d.failure.testClass,
-          testName: d.failure.testName,
-          file: located.file,
-          constantName: located.constantName,
-          oldXpath: located.oldXpath,
-          newXpath: candidate.xpath,
-          strategy: candidate.strategy,
-          provider: "provider" in candidate ? candidate.provider : undefined,
-          model: "model" in candidate ? candidate.model : undefined,
-          rationale: "rationale" in candidate ? candidate.rationale : undefined,
-          matchCount: 1,
-          redTests: `${red.data.tests.failed}/${red.data.tests.total} failed`,
-          greenTests: `${green.data.tests.total}/${green.data.tests.total} passed`,
-          changedLines: patched.changedLines,
-        };
-        return await openPullRequest(dir, evidence);
-      } finally {
-        await cleanup();
-      }
+      const evidence: PrEvidence = {
+        repoFullName: d.repository.fullName,
+        runId,
+        jobName: d.build.jobName,
+        buildNumber: d.build.buildNumber,
+        buildUrl: d.build.buildUrl,
+        commitSha: d.scm.commitSha,
+        testClass: d.failure.testClass,
+        testName: d.failure.testName,
+        file: located.file,
+        constantName: located.constantName,
+        oldXpath: located.oldXpath,
+        newXpath: candidate.xpath,
+        strategy: candidate.strategy,
+        provider: "provider" in candidate ? candidate.provider : undefined,
+        model: "model" in candidate ? candidate.model : undefined,
+        rationale: "rationale" in candidate ? candidate.rationale : undefined,
+        matchCount: 1,
+        redTests: `${red.data.tests.failed}/${red.data.tests.total} failed`,
+        greenTests: `${green.data.tests.total}/${green.data.tests.total} passed`,
+        changedLines: patched.changedLines,
+      };
+      return await openPullRequest(evidence);
     });
 
     await step.run("finish", () => finish(runId, "pr_open", undefined, prUrl));
