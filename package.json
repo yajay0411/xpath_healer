@@ -7,13 +7,23 @@
     "build": "next build",
     "start": "next start --port 3002",
     "lint": "eslint",
-    "check": "node --no-warnings --experimental-strip-types scripts/check-normalize.mts"
+    "check": "npm run check:normalize && npm run check:heal",
+    "check:normalize": "node --no-warnings --experimental-strip-types scripts/check-normalize.mts",
+    "check:heal": "node --no-warnings --experimental-strip-types scripts/check-heal.mts",
+    "inngest": "npx inngest-cli@latest dev -u http://localhost:3002/api/inngest",
+    "typecheck": "tsc --noEmit",
+    "check:gates": "node --no-warnings --experimental-strip-types scripts/check-gates.mts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.122.0",
     "@supabase/supabase-js": "^2.112.4",
+    "cheerio": "^1.2.0",
+    "inngest": "^4.18.1",
     "next": "16.3.3",
+    "playwright-core": "^1.62.1",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "^4.5.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

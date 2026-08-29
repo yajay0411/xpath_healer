@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { normalize } from "@/lib/normalize";
+import { publishFailures, publishVerify } from "@/lib/heal/publish";
 import { db } from "@/lib/supabase";
 
 export const runtime = "nodejs";
@@ -25,6 +26,22 @@ const LOGGED_HEADERS = [
   "x-jenkins-build",
   "x-delivery-id",
 ];
+
+/**
+ * raw_payload is kept verbatim so a normalizer bug is always recoverable - but the attached
+ * DOM is not ours to keep unredacted. It is sanitized and stored by reference instead.
+ */
+function withoutDom(raw: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(raw.failures)) return raw;
+  return {
+    ...raw,
+    failures: raw.failures.map((f) =>
+      f && typeof f === "object" && "domGz" in f
+        ? { ...f, domGz: `«${String((f as { domGz: string }).domGz).length} chars, stored by reference»` }
+        : f,
+    ),
+  };
+}
 
 export async function POST(request: Request) {
   const headers = Object.fromEntries(
@@ -62,7 +79,7 @@ export async function POST(request: Request) {
       http_status: status,
       auth_ok: authOk,
       headers,
-      raw_payload: raw,
+      raw_payload: raw ? withoutDom(raw) : null,
       normalized,
       parse_error: parseError,
       job_name: normalized?.build.job ?? null,
@@ -95,12 +112,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: parseError }, { status: 400 });
   }
 
+  // Publish, then return. The workflow runs asynchronously: this handler never waits for a
+  // Maven run, a model call, a clone or a PR. A publish failure is logged, not raised - the
+  // webhook_log row is already durable, so nothing is lost that cannot be replayed.
+  let published = 0;
+  let verify = false;
+  try {
+    if (typeof raw!.healRunId === "string") {
+      verify = await publishVerify(normalized!, raw!);
+    } else if (normalized!.diagnosis.xpathRelated) {
+      published = await publishFailures(normalized!, raw!, data.id);
+    }
+  } catch (e) {
+    console.error("[webhooks/jenkins] publish failed:", e instanceof Error ? e.message : e);
+  }
+
   return NextResponse.json(
     {
       ok: true,
       id: data.id,
       event: normalized!.event,
       diagnosis: normalized!.diagnosis,
+      published,
+      verify,
     },
     { status: 202 },
   );
