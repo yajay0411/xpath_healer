@@ -1,4 +1,4 @@
-import { trace } from "./audit";
+import { trace } from "@/modules/healing/audit";
 
 /**
  * Triggers the Jenkins heal-verify job and returns. It does NOT wait: the workflow suspends

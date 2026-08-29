@@ -1,4 +1,9 @@
-import { db } from "@/lib/supabase";
+import { AppShell, EmptyState } from "@/components/app-shell";
+import { HealStatusBadge } from "@/components/status-badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { db } from "@/modules/platform";
 
 export const dynamic = "force-dynamic";
 
@@ -7,7 +12,6 @@ type Run = {
   created_at: string;
   status: string;
   reason: string | null;
-  repo_full_name: string;
   commit_sha: string;
   job_name: string | null;
   build_number: number | null;
@@ -21,122 +25,137 @@ type Run = {
   pr_url: string | null;
 };
 
-type Attempt = { run_id: string; strategy: string; cost_usd: string | null; verdict: string };
+type Attempt = { run_id: string; cost_usd: string | null; verdict: string };
 
-/** Terminal states are not all failures: no_candidate and skipped are correct outcomes. */
-const TONE: Record<string, string> = {
-  pr_open: "bg-emerald-100 text-emerald-900",
-  verified: "bg-emerald-50 text-emerald-800",
-  healing: "bg-blue-100 text-blue-900",
-  no_candidate: "bg-neutral-200 text-neutral-800",
-  skipped: "bg-neutral-100 text-neutral-600",
-  rejected: "bg-amber-100 text-amber-900",
-  failed: "bg-red-100 text-red-800",
-};
-
-export default async function Heals() {
+export default async function HealsPage() {
   const [{ data: runs, error }, { data: attempts }] = await Promise.all([
     db.from("heal_run").select("*").order("created_at", { ascending: false }).limit(50),
-    db.from("heal_attempt").select("run_id, strategy, cost_usd, verdict"),
+    db.from("heal_attempt").select("run_id, cost_usd, verdict"),
   ]);
 
-  const byRun = new Map<string, Attempt[]>();
-  for (const a of (attempts ?? []) as Attempt[]) {
-    byRun.set(a.run_id, [...(byRun.get(a.run_id) ?? []), a]);
-  }
-
   const rows = (runs ?? []) as Run[];
-  const spend = (attempts ?? []).reduce((s, a) => s + Number(a.cost_usd ?? 0), 0);
+  const tries = (attempts ?? []) as Attempt[];
+
+  const byRun = new Map<string, Attempt[]>();
+  for (const a of tries) byRun.set(a.run_id, [...(byRun.get(a.run_id) ?? []), a]);
+
+  const spend = tries.reduce((sum, a) => sum + Number(a.cost_usd ?? 0), 0);
   const withModel = rows.filter((r) => r.strategy === "ai").length;
   const deterministic = rows.filter((r) => r.strategy === "deterministic").length;
+  const opened = rows.filter((r) => r.pr_url).length;
 
   return (
-    <main className="mx-auto max-w-5xl p-8">
-      <h1 className="text-2xl font-semibold">heal runs</h1>
-      <p className="mt-1 text-sm text-neutral-600">
-        Every run is human-reviewed. <code>no_candidate</code> and <code>skipped</code> are
-        successful outcomes — the healer declining to guess.
-      </p>
-
-      <dl className="mt-6 grid grid-cols-3 gap-4 text-sm">
-        <div className="rounded-lg border border-neutral-200 p-3">
-          <dt className="text-neutral-500">healed without a model</dt>
-          <dd className="text-xl font-semibold">
-            {deterministic}
-            <span className="text-sm font-normal text-neutral-500"> / {deterministic + withModel}</span>
-          </dd>
-        </div>
-        <div className="rounded-lg border border-neutral-200 p-3">
-          <dt className="text-neutral-500">PRs opened</dt>
-          <dd className="text-xl font-semibold">{rows.filter((r) => r.pr_url).length}</dd>
-        </div>
-        <div className="rounded-lg border border-neutral-200 p-3">
-          <dt className="text-neutral-500">model spend</dt>
-          <dd className="text-xl font-semibold">${spend.toFixed(3)}</dd>
-        </div>
+    <AppShell
+      active="heals"
+      title="Heal runs"
+      description={
+        <>
+          Every run ends at a human. <code className="font-mono text-xs">no candidate</code> and{" "}
+          <code className="font-mono text-xs">skipped</code> are successful outcomes — the healer
+          declining to guess.
+        </>
+      }
+    >
+      <dl className="grid gap-4 sm:grid-cols-3">
+        <Stat
+          label="Healed without a model"
+          value={`${deterministic}`}
+          hint={`of ${deterministic + withModel} with a strategy`}
+        />
+        <Stat label="PRs opened" value={`${opened}`} hint="each awaiting review" />
+        <Stat label="Model spend" value={`$${spend.toFixed(3)}`} hint="all attempts, all time" />
       </dl>
 
       {error && (
-        <p className="mt-6 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">
-          {error.message}
-        </p>
+        <Alert variant="destructive" className="mt-6">
+          <AlertTitle>Could not load heal runs</AlertTitle>
+          <AlertDescription>{error.message}</AlertDescription>
+        </Alert>
       )}
 
       {!error && rows.length === 0 && (
-        <p className="mt-6 text-sm text-neutral-500">
-          No heal runs yet. A build that fails on an XPath locator starts one.
-        </p>
+        <div className="mt-6">
+          <EmptyState>No heal runs yet. A build failing on an XPath locator starts one.</EmptyState>
+        </div>
       )}
 
-      <ul className="mt-6 space-y-3">
+      <div className="mt-6 space-y-3">
         {rows.map((run) => {
-          const tried = byRun.get(run.id) ?? [];
+          const attempted = byRun.get(run.id) ?? [];
+          const rejected = attempted.filter((a) => a.verdict === "rejected").length;
+
           return (
-            <li key={run.id} className="rounded-lg border border-neutral-200 p-4 text-sm">
-              <div className="flex flex-wrap items-center gap-3">
-                <span
-                  className={`rounded px-2 py-0.5 text-xs font-medium ${TONE[run.status] ?? "bg-neutral-100"}`}
-                >
-                  {run.status}
-                </span>
-                <strong>{run.constant_name ?? run.job_name ?? "unknown"}</strong>
-                <span className="text-neutral-500">
+            <Card key={run.id}>
+              <CardHeader>
+                <div className="flex flex-wrap items-center gap-2">
+                  <HealStatusBadge status={run.status} />
+                  <CardTitle className="text-base">
+                    {run.constant_name ?? run.job_name ?? "unknown locator"}
+                  </CardTitle>
+                  {run.strategy && <Badge variant="outline">{run.strategy}</Badge>}
+                  <time
+                    className="text-muted-foreground ml-auto text-xs"
+                    dateTime={run.created_at}
+                  >
+                    {new Date(run.created_at).toLocaleString()}
+                  </time>
+                </div>
+                <CardDescription>
                   {run.job_name}#{run.build_number} · {run.commit_sha.slice(0, 7)}
-                </span>
-                {run.strategy && (
-                  <span className="rounded bg-neutral-100 px-2 py-0.5 text-xs">{run.strategy}</span>
-                )}
-                <span className="ml-auto text-xs text-neutral-400">
-                  {new Date(run.created_at).toLocaleString()}
-                </span>
-              </div>
+                  {run.source_file && <> · {run.source_file.split("/").pop()}</>}
+                </CardDescription>
+              </CardHeader>
 
-              <div className="mt-2 space-y-1 font-mono text-xs">
-                <div className="text-red-700">− {run.broken_xpath}</div>
-                {run.candidate_xpath && <div className="text-emerald-700">+ {run.candidate_xpath}</div>}
-              </div>
+              <CardContent className="space-y-3">
+                {/* The diff is the whole story: read it before the PR. */}
+                <div className="bg-muted/50 space-y-1 overflow-x-auto rounded-md p-3 font-mono text-xs">
+                  <div className="text-destructive whitespace-pre">− {run.broken_xpath}</div>
+                  {run.candidate_xpath && (
+                    <div className="whitespace-pre text-emerald-600 dark:text-emerald-400">
+                      + {run.candidate_xpath}
+                    </div>
+                  )}
+                </div>
 
-              <div className="mt-2 flex flex-wrap gap-3 text-xs text-neutral-500">
-                {run.test_class && (
+                <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                  {run.test_class && (
+                    <span>
+                      {run.test_class.split(".").pop()}.{run.test_name}
+                    </span>
+                  )}
                   <span>
-                    {run.test_class.split(".").pop()}.{run.test_name}
+                    {attempted.length} candidate{attempted.length === 1 ? "" : "s"}, {rejected}{" "}
+                    rejected
                   </span>
-                )}
-                {run.source_file && <span>{run.source_file.split("/").pop()}</span>}
-                <span>
-                  {tried.length} candidate(s), {tried.filter((a) => a.verdict === "rejected").length} rejected
-                </span>
-                {run.reason && <span className="text-amber-700">{run.reason}</span>}
-                {run.pr_url && (
-                  <a className="text-blue-700 underline" href={run.pr_url}>
-                    review PR →
-                  </a>
-                )}
-              </div>
-            </li>
+                  {run.reason && <span className="text-foreground">{run.reason}</span>}
+                  {run.pr_url && (
+                    <a
+                      href={run.pr_url}
+                      className="text-foreground ml-auto font-medium underline underline-offset-4"
+                    >
+                      Review PR →
+                    </a>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           );
         })}
-      </ul>
-    </main>
+      </div>
+    </AppShell>
+  );
+}
+
+function Stat({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <dt className="text-muted-foreground text-sm font-normal">{label}</dt>
+      </CardHeader>
+      <CardContent>
+        <dd className="text-2xl font-semibold tabular-nums">{value}</dd>
+        <p className="text-muted-foreground mt-1 text-xs">{hint}</p>
+      </CardContent>
+    </Card>
   );
 }

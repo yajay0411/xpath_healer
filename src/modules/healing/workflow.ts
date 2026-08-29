@@ -1,18 +1,18 @@
 import { NonRetriableError } from "inngest";
 
-import { inngest, jenkinsVerifyCompleted, xpathFailureDetected } from "../events";
-import { db } from "../supabase";
-import { getDom } from "../storage";
-import { finish, recordAttempt, recordVerify, trace, updateRun } from "./audit";
-import { checkBudget, repoAllowed } from "./budget";
-import { deterministicCandidates } from "./candidates";
-import { findLocator } from "./locator";
-import { applyLocator, diffIsSafe } from "./patch";
-import { branchName, deleteBranch, openPullRequest, type PrEvidence } from "./pr";
-import { checkoutCommit, git } from "./repo";
-import { triggerVerify } from "./verify";
-import { gateSingleMatch } from "./xpath-eval";
-import { provider } from "./providers";
+import { inngest, jenkinsVerifyCompleted, xpathFailureDetected } from "@/modules/platform/events";
+import { db } from "@/modules/platform/supabase";
+import { getDom } from "@/modules/platform/storage";
+import { finish, recordAttempt, recordVerify, trace, updateRun } from "@/modules/healing/audit";
+import { checkBudget, repoAllowed } from "@/modules/healing/budget";
+import { deterministicCandidates } from "@/modules/healing/candidates/deterministic";
+import { findLocator } from "@/modules/healing/sources/locator";
+import { applyLocator, diffIsSafe } from "@/modules/healing/gates/diff-policy";
+import { branchName, deleteBranch, openPullRequest, type PrEvidence } from "@/modules/healing/delivery/pull-request";
+import { checkoutCommit, git } from "@/modules/healing/sources/repo";
+import { triggerVerify } from "@/modules/healing/delivery/jenkins-verify";
+import { gateSingleMatch } from "@/modules/healing/gates/single-match";
+import { provider } from "@/modules/healing/candidates/llm";
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

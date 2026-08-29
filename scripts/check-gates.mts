@@ -11,9 +11,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { sanitizeDom } from "../src/lib/heal/dom.ts";
-import { deterministicCandidates } from "../src/lib/heal/candidates.ts";
-import { gateSingleMatch, matchCount } from "../src/lib/heal/xpath-eval.ts";
+import { sanitizeDom } from "../src/modules/healing/sources/dom.ts";
+import { deterministicCandidates } from "../src/modules/healing/candidates/deterministic.ts";
+import { gateSingleMatch, matchCount } from "../src/modules/healing/gates/single-match.ts";
 
 const dom = sanitizeDom(
   readFileSync(join(import.meta.dirname, "fixtures", "login-page.html"), "utf8"),

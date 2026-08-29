@@ -1,5 +1,5 @@
-import { db } from "../supabase";
-import type { HealStatus } from "../events";
+import { db } from "@/modules/platform/supabase";
+import type { HealStatus } from "@/modules/platform/events";
 
 /** Every state transition, appended. Independent of the Inngest dashboard on purpose. */
 export async function trace(

@@ -1,9 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
-import { normalize } from "@/lib/normalize";
-import { publishFailures, publishVerify } from "@/lib/heal/publish";
-import { db } from "@/lib/supabase";
+import { normalize, publishFailures, publishVerify } from "@/modules/intake";
+import { db } from "@/modules/platform";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

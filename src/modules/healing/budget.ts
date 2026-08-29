@@ -1,4 +1,4 @@
-import { db } from "../supabase";
+import { db } from "@/modules/platform/supabase";
 
 const num = (v: string | undefined, fallback: number) => {
   const n = Number(v);

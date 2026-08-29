@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import { inngest } from "../events";
-import { putDom } from "../storage";
-import { sanitizeDom } from "./dom";
-import { driftKey, idempotencyKey, repoSlug } from "./identity";
-import type { NormalizedBuildFailure } from "../types";
+import { inngest } from "@/modules/platform/events";
+import { putDom } from "@/modules/platform/storage";
+import { sanitizeDom } from "@/modules/healing/sources/dom";
+import { driftKey, idempotencyKey, repoSlug } from "@/modules/healing/identity";
+import type { NormalizedBuildFailure } from "./types";
 
 type RawFailure = { domGz?: string; pageUrl?: string };
 

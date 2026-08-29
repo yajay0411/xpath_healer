@@ -9,12 +9,12 @@ import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { sanitizeDom } from "../src/lib/heal/dom.ts";
-import { deterministicCandidates, FORBIDDEN, parseLastStep } from "../src/lib/heal/candidates.ts";
-import { findLocator } from "../src/lib/heal/locator.ts";
-import { applyLocator, diffIsSafe } from "../src/lib/heal/patch.ts";
-import { branchName, driftKey, idempotencyKey, repoSlug } from "../src/lib/heal/identity.ts";
-import { git, scrub } from "../src/lib/heal/repo.ts";
+import { sanitizeDom } from "../src/modules/healing/sources/dom.ts";
+import { deterministicCandidates, FORBIDDEN, parseLastStep } from "../src/modules/healing/candidates/deterministic.ts";
+import { findLocator } from "../src/modules/healing/sources/locator.ts";
+import { applyLocator, diffIsSafe } from "../src/modules/healing/gates/diff-policy.ts";
+import { branchName, driftKey, idempotencyKey, repoSlug } from "../src/modules/healing/identity.ts";
+import { git, scrub } from "../src/modules/healing/sources/repo.ts";
 
 const FIXTURE = join(import.meta.dirname, "fixtures", "login-page.html");
 const realDom = readFileSync(FIXTURE, "utf8");

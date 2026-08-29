@@ -3,7 +3,7 @@
  * Real Selenium failure text, taken from actual next_login_javatestcase runs.
  */
 import assert from "node:assert/strict";
-import { diagnose, extractXpaths, normalize } from "../src/lib/normalize.ts";
+import { diagnose, extractXpaths, normalize } from "../src/modules/intake/normalize.ts";
 
 // --- extractXpaths -------------------------------------------------------
 assert.deepEqual(

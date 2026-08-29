@@ -1,5 +1,5 @@
-import { branchName } from "./identity";
-import { git, scrub } from "./repo";
+import { branchName } from "@/modules/healing/identity";
+import { git, scrub } from "@/modules/healing/sources/repo";
 
 export { branchName };
 
